@@ -22,7 +22,7 @@ SHEET_NAME = "Učetnictví"
 STATE_FILE = "/tmp/bot_state.json"
 
 # Globální proměnné
-last_row_hashes = {}  # {hash: {'data': {...}, 'message_id': 12345}}
+last_row_hashes = {}
 first_check_done = False
 
 def load_state():
@@ -100,6 +100,25 @@ def format_accounting(value):
     num = clean_number(value)
     return f"{int(num):,}".replace(',', '.')
 
+def is_valid_row(datum, popis, castka):
+    """Zkontroluj jestli je řádek validní"""
+    # Ignoruj některé speciální řádky
+    invalid_keywords = ['nic', 'sajk si hraje', 'datum', 'date', 'celkem', '']
+    
+    datum_lower = str(datum).lower().strip()
+    popis_lower = str(popis).lower().strip()
+    
+    # Řádek je validní pokud:
+    # - Má nenulovou částku A
+    # - Není to speciální řádek
+    if castka == 0:
+        return False
+    
+    if datum_lower in invalid_keywords or popis_lower in invalid_keywords:
+        return False
+    
+    return True
+
 def get_accounting_data():
     try:
         client = get_sheets_client()
@@ -110,7 +129,7 @@ def get_accounting_data():
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
         print("✅ Sheet opened")
         
-        # Čti sloupce B, C, D - řádky 2-500 (na místo 2-100)
+        # Čti sloupce B, C, D - řádky 2-1000
         all_cells = sheet.range('B2:D1000')
         print(f"✅ Got {len(all_cells)} cells")
         
@@ -121,25 +140,16 @@ def get_accounting_data():
                 
                 if len(row_data) >= 1 and row_data[0].value:
                     datum = str(row_data[0].value).strip()
+                    popis = str(row_data[1].value).strip() if len(row_data) > 1 else ""
+                    castka = clean_number(row_data[2].value if len(row_data) > 2 else 0)
                     
-                    # Přeskočit prázdné řádky a nadpisy
-                    if not datum or datum.lower() in ['datum', 'date', ''] or 'celkem' in datum.lower():
-                        continue
-                    
-                    try:
-                        # B=datum, C=popis, D=castka
-                        popis = str(row_data[1].value).strip() if len(row_data) > 1 else ""
-                        castka = clean_number(row_data[2].value if len(row_data) > 2 else 0)
-                        
-                        if castka != 0 or datum:
-                            data.append({
-                                "datum": datum,
-                                "popis": popis,
-                                "castka": castka
-                            })
-                    except Exception as e:
-                        print(f"Parse error for {datum}: {e}")
-                        continue
+                    # NOVÁ VALIDACE - lépe filtruje řádky
+                    if is_valid_row(datum, popis, castka):
+                        data.append({
+                            "datum": datum,
+                            "popis": popis,
+                            "castka": castka
+                        })
             
             print(f"✅ Got {len(data)} rows of data")
             return data if data else None
@@ -162,26 +172,32 @@ def create_embed(title, description, color, timestamp):
 
 async def send_new_transaction(channel, item):
     """Pošli novou transakci a vrať ID zprávy"""
-    castka_fmt = format_accounting(item['castka'])
-    
-    embed = create_embed(
-        "📝 Nová Transakce",
-        "",
-        discord.Color.from_rgb(52, 211, 153),
-        datetime.now()
-    )
-    
-    embed.add_field(
-        name="💳 Detail",
-        value=(f"**Datum:** {item['datum']}\n"
-               f"**Popis:** {item['popis']}\n"
-               f"**Částka:** {castka_fmt}"),
-        inline=False
-    )
-    
-    msg = await channel.send(embed=embed)
-    print(f"✅ Nová transakce poslána: {item['datum']} - {item['popis']} (ID: {msg.id})")
-    return msg.id
+    try:
+        castka_fmt = format_accounting(item['castka'])
+        
+        embed = create_embed(
+            "📝 Nová Transakce",
+            "",
+            discord.Color.from_rgb(52, 211, 153),
+            datetime.now()
+        )
+        
+        embed.add_field(
+            name="💳 Detail",
+            value=(f"**Datum:** {item['datum']}\n"
+                   f"**Popis:** {item['popis']}\n"
+                   f"**Částka:** {castka_fmt}"),
+            inline=False
+        )
+        
+        msg = await channel.send(embed=embed)
+        print(f"✅ Nová transakce poslána: {item['datum']} - {item['popis']} (ID: {msg.id})")
+        return msg.id
+    except Exception as e:
+        print(f"❌ Chyba při posílání transakce: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 async def update_transaction(channel, message_id, item):
     """Uprav existující transakci v Discordu"""
@@ -193,7 +209,7 @@ async def update_transaction(channel, message_id, item):
         embed = create_embed(
             "📝 Upravená Transakce",
             "",
-            discord.Color.from_rgb(251, 191, 36),  # Oranžová pro úpravu
+            discord.Color.from_rgb(251, 191, 36),
             datetime.now()
         )
         
@@ -228,10 +244,13 @@ async def check_new_transactions():
     
     try:
         guild = bot.get_guild(SERVER_ID)
-        channel = guild.get_channel(CHANNEL_ID)
+        if not guild:
+            print(f"❌ Server {SERVER_ID} nenalezen!")
+            return
         
+        channel = guild.get_channel(CHANNEL_ID)
         if not channel:
-            print("❌ Kanál nenalezen!")
+            print(f"❌ Kanál {CHANNEL_ID} nenalezen!")
             return
         
         # PRVNÍ KONTROLA - jen si zapamatuj všechny řádky
@@ -267,18 +286,12 @@ async def check_new_transactions():
                     'message_id': None
                 }
         
-        # Pošli nové transakce
+        # Pošli nové transakce - KAŽDÁ V SEPNÉ TRY-CATCH
         for item in new_items:
             row_hash = create_row_hash(item)
             msg_id = await send_new_transaction(channel, item)
-            last_row_hashes[row_hash]['message_id'] = msg_id
-        
-        # Detekuj ZMĚNY v existujících řádcích
-        for row_hash, stored_info in list(last_row_hashes.items()):
-            if row_hash in current_hashes:
-                # Řádek stále existuje - zkontroluj jestli se změnil
-                # (toto by se stalo jen když bys ručně editoval obsah)
-                pass
+            if msg_id:
+                last_row_hashes[row_hash]['message_id'] = msg_id
         
         # Detekuj SMAZANÉ řádky
         deleted_hashes = set(last_row_hashes.keys()) - current_hashes
@@ -293,7 +306,9 @@ async def check_new_transactions():
         save_state()
         
     except Exception as e:
-        print(f"❌ Chyba při kontrole: {e}")
+        print(f"❌ Chyba v kontrole: {e}")
+        import traceback
+        traceback.print_exc()
 
 @check_new_transactions.before_loop
 async def before_check():
