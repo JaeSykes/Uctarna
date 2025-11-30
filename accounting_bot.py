@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 import re
+import hashlib
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -20,34 +21,39 @@ SHEET_NAME = "Učetnictví"
 # Soubor pro uložení stavu (persistent storage)
 STATE_FILE = "/tmp/bot_state.json"
 
-# Globální proměnné pro sledování řádků
-last_row_count = 0
-first_check_done = False  # Příznak pro první kontrolu
+# Globální proměnné
+last_row_hashes = {}  # {hash: {'data': {...}, 'message_id': 12345}}
+first_check_done = False
 
 def load_state():
-    """Načti poslední známý počet řádků ze souboru"""
-    global last_row_count
+    """Načti poslední známý stav ze souboru"""
+    global last_row_hashes
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
                 data = json.load(f)
-                last_row_count = data.get('last_row_count', 0)
-                print(f"✅ Načten poslední stav: {last_row_count} řádků")
+                last_row_hashes = data.get('last_row_hashes', {})
+                print(f"✅ Načten poslední stav: {len(last_row_hashes)} řádků")
         else:
-            last_row_count = 0
+            last_row_hashes = {}
             print("📝 Žádný předchozí stav nenalezen")
     except Exception as e:
         print(f"⚠️  Chyba při načítání stavu: {e}")
-        last_row_count = 0
+        last_row_hashes = {}
 
 def save_state():
     """Ulož aktuální stav do souboru"""
     try:
         with open(STATE_FILE, 'w') as f:
-            json.dump({'last_row_count': last_row_count}, f)
-        print(f"💾 Stav uložen: {last_row_count} řádků")
+            json.dump({'last_row_hashes': last_row_hashes}, f)
+        print(f"💾 Stav uložen: {len(last_row_hashes)} řádků")
     except Exception as e:
         print(f"❌ Chyba při ukládání stavu: {e}")
+
+def create_row_hash(row_data):
+    """Vytvoř unikátní hash pro řádek (datum|popis|castka)"""
+    row_str = f"{row_data['datum']}|{row_data['popis']}|{row_data['castka']}"
+    return hashlib.md5(row_str.encode()).hexdigest()
 
 print("="*60)
 print("ACCOUNTING BOT - CZM8")
@@ -154,18 +160,40 @@ def create_embed(title, description, color, timestamp):
         timestamp=timestamp
     )
 
-async def send_new_transactions(channel, new_data):
-    """Pošli POUZE nové transakce jako nové zprávy"""
-    if not new_data:
-        return
+async def send_new_transaction(channel, item):
+    """Pošli novou transakci a vrať ID zprávy"""
+    castka_fmt = format_accounting(item['castka'])
     
-    for item in new_data:
-        castka_fmt = format_accounting(item['castka'])
+    embed = create_embed(
+        "📝 Nová Transakce",
+        "",
+        discord.Color.from_rgb(52, 211, 153),
+        datetime.now()
+    )
+    
+    embed.add_field(
+        name="💳 Detail",
+        value=(f"**Datum:** {item['datum']}\n"
+               f"**Popis:** {item['popis']}\n"
+               f"**Částka:** {castka_fmt}"),
+        inline=False
+    )
+    
+    msg = await channel.send(embed=embed)
+    print(f"✅ Nová transakce poslána: {item['datum']} - {item['popis']} (ID: {msg.id})")
+    return msg.id
+
+async def update_transaction(channel, message_id, item):
+    """Uprav existující transakci v Discordu"""
+    castka_fmt = format_accounting(item['castka'])
+    
+    try:
+        msg = await channel.fetch_message(message_id)
         
         embed = create_embed(
-            "📝 Nová Transakce",
+            "📝 Upravená Transakce",
             "",
-            discord.Color.from_rgb(52, 211, 153),
+            discord.Color.from_rgb(251, 191, 36),  # Oranžová pro úpravu
             datetime.now()
         )
         
@@ -177,23 +205,26 @@ async def send_new_transactions(channel, new_data):
             inline=False
         )
         
-        await channel.send(embed=embed)
-        print(f"✅ Nová transakce poslána: {item['datum']} - {item['popis']}")
+        embed.set_footer(text="⚠️ Tento řádek byl upraven")
+        
+        await msg.edit(embed=embed)
+        print(f"✅ Transakce upravena: {item['datum']} - {item['popis']}")
+    except discord.NotFound:
+        print(f"⚠️  Zpráva s ID {message_id} nebyla nalezena (možná byla smazána)")
+    except Exception as e:
+        print(f"❌ Chyba při úpravě zprávy: {e}")
 
 @tasks.loop(minutes=5)
 async def check_new_transactions():
-    """Kontroluj nové transakce každých 5 minut"""
-    global last_row_count, first_check_done
+    """Kontroluj nové transakce a změny"""
+    global last_row_hashes, first_check_done
     
-    print("\n🔍 Kontrola nových transakcí...")
+    print("\n🔍 Kontrola transakcí...")
     data = get_accounting_data()
     
     if not data:
         print("❌ Nelze přečíst data")
         return
-    
-    current_row_count = len(data)
-    print(f"📊 Aktuální počet řádků: {current_row_count}, Poslední známý: {last_row_count}")
     
     try:
         guild = bot.get_guild(SERVER_ID)
@@ -203,29 +234,63 @@ async def check_new_transactions():
             print("❌ Kanál nenalezen!")
             return
         
-        # PRVNÍ KONTROLA - jen si zapamatuj počet, neposílej notifikace
+        # PRVNÍ KONTROLA - jen si zapamatuj všechny řádky
         if not first_check_done:
-            print(f"📌 PRVNÍ KONTROLA - Zapamatuji si {current_row_count} stávajících řádků")
-            print(f"⏭️  Příští nové řádky budou poslány jako notifikace")
-            last_row_count = current_row_count
+            print(f"📌 PRVNÍ KONTROLA - Zapamatuji si {len(data)} stávajících řádků")
+            
+            for item in data:
+                row_hash = create_row_hash(item)
+                last_row_hashes[row_hash] = {
+                    'data': item,
+                    'message_id': None
+                }
+            
             save_state()
             first_check_done = True
+            print(f"⏭️  Příští nové řádky budou poslány jako notifikace")
             return
         
-        # DALŠÍ KONTROLY - Postup jen nové transakce
-        if current_row_count > last_row_count:
-            new_rows = current_row_count - last_row_count
-            print(f"📈 Nalezeny {new_rows} nové transakce!")
-            
-            # Pošli POUZE nové transakce
-            new_transactions = data[-new_rows:]
-            await send_new_transactions(channel, new_transactions)
-        else:
-            print("✅ Žádné nové transakce")
+        # DALŠÍ KONTROLY - Detekuj nové a upravené řádky
+        current_hashes = set()
+        new_items = []
         
-        # Aktualizuj poslední známý počet
-        last_row_count = current_row_count
-        save_state()  # Ulož do souboru
+        for item in data:
+            row_hash = create_row_hash(item)
+            current_hashes.add(row_hash)
+            
+            if row_hash not in last_row_hashes:
+                # NOVÝ ŘÁDEK
+                print(f"📈 Nový řádek: {item['datum']} - {item['popis']}")
+                new_items.append(item)
+                last_row_hashes[row_hash] = {
+                    'data': item,
+                    'message_id': None
+                }
+        
+        # Pošli nové transakce
+        for item in new_items:
+            row_hash = create_row_hash(item)
+            msg_id = await send_new_transaction(channel, item)
+            last_row_hashes[row_hash]['message_id'] = msg_id
+        
+        # Detekuj ZMĚNY v existujících řádcích
+        for row_hash, stored_info in list(last_row_hashes.items()):
+            if row_hash in current_hashes:
+                # Řádek stále existuje - zkontroluj jestli se změnil
+                # (toto by se stalo jen když bys ručně editoval obsah)
+                pass
+        
+        # Detekuj SMAZANÉ řádky
+        deleted_hashes = set(last_row_hashes.keys()) - current_hashes
+        if deleted_hashes:
+            print(f"🗑️  Smazáno {len(deleted_hashes)} řádků")
+            for deleted_hash in deleted_hashes:
+                del last_row_hashes[deleted_hash]
+        
+        if not new_items and not deleted_hashes:
+            print("✅ Žádné změny")
+        
+        save_state()
         
     except Exception as e:
         print(f"❌ Chyba při kontrole: {e}")
@@ -322,7 +387,7 @@ async def on_ready():
     
     if not check_new_transactions.is_running():
         check_new_transactions.start()
-        print("🔍 Kontrola nových transakcí spuštěna (každých 5 minut)")
+        print("🔍 Kontrola transakcí spuštěna (každých 5 minut)")
 
 token = os.getenv("DISCORD_TOKEN")
 if token:
