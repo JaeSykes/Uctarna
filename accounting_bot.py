@@ -51,8 +51,8 @@ def save_state():
         print(f"❌ Chyba při ukládání stavu: {e}")
 
 def create_row_hash(row_data):
-    """Vytvoř unikátní hash pro řádek (datum|castka|popis)"""
-    row_str = f"{row_data['datum']}|{row_data['castka']}|{row_data['popis']}"
+    """Vytvoř unikátní hash pro řádek (pohyb|popis|rozpocet)"""
+    row_str = f"{row_data['pohyb']}|{row_data['popis']}|{row_data['rozpocet']}"
     return hashlib.md5(row_str.encode()).hexdigest()
 
 print("="*60)
@@ -100,21 +100,21 @@ def format_accounting(value):
     num = clean_number(value)
     return f"{int(num):,}".replace(',', '.')
 
-def is_valid_row(datum, castka, popis):
+def is_valid_row(pohyb, popis, rozpocet):
     """Zkontroluj jestli je řádek validní"""
     # Ignoruj některé speciální řádky
-    invalid_keywords = ['nic', 'sajk si hraje', 'datum', 'date', 'celkem', '']
+    invalid_keywords = ['nic', 'sajk si hraje', 'pohyb', 'popis', 'celkem', '']
     
-    datum_lower = str(datum).lower().strip()
+    pohyb_lower = str(pohyb).lower().strip()
     popis_lower = str(popis).lower().strip()
     
     # Řádek je validní pokud:
-    # - Má nenulovou částku A
+    # - Má nenulový pohyb A
     # - Není to speciální řádek
-    if castka == 0:
+    if pohyb == 0:
         return False
     
-    if datum_lower in invalid_keywords or popis_lower in invalid_keywords:
+    if pohyb_lower in invalid_keywords or popis_lower in invalid_keywords:
         return False
     
     return True
@@ -130,7 +130,7 @@ def get_accounting_data():
         print("✅ Sheet opened")
         
         # Čti sloupce B, C, D - řádky 2-1000
-        # B = Datum, C = Nový pohyb (castka), D = Popis
+        # B = Nový pohyb, C = Popis, D = Aktualně k dispozici
         all_cells = sheet.range('B2:D1000')
         print(f"✅ Got {len(all_cells)} cells")
         
@@ -140,16 +140,16 @@ def get_accounting_data():
                 row_data = all_cells[i:i+3]
                 
                 if len(row_data) >= 1 and row_data[0].value:
-                    datum = str(row_data[0].value).strip()
-                    castka = clean_number(row_data[1].value if len(row_data) > 1 else 0)
-                    popis = str(row_data[2].value).strip() if len(row_data) > 2 else ""
+                    pohyb = clean_number(row_data[0].value)
+                    popis = str(row_data[1].value).strip() if len(row_data) > 1 else ""
+                    rozpocet = str(row_data[2].value).strip() if len(row_data) > 2 else ""
                     
                     # VALIDACE
-                    if is_valid_row(datum, castka, popis):
+                    if is_valid_row(pohyb, popis, rozpocet):
                         data.append({
-                            "datum": datum,
-                            "castka": castka,
-                            "popis": popis
+                            "pohyb": pohyb,
+                            "popis": popis,
+                            "rozpocet": rozpocet
                         })
             
             print(f"✅ Got {len(data)} rows of data")
@@ -174,7 +174,7 @@ def create_embed(title, description, color, timestamp):
 async def send_new_transaction(channel, item):
     """Pošli novou transakci a vrať ID zprávy"""
     try:
-        castka_fmt = format_accounting(item['castka'])
+        pohyb_fmt = format_accounting(item['pohyb'])
         
         embed = create_embed(
             "📝 Nová Transakce",
@@ -183,17 +183,17 @@ async def send_new_transaction(channel, item):
             datetime.now()
         )
         
-        # Správné pořadí sloupců: Datum, Nový pohyb, Popis
+        # Formát bez "Detail" labelu - přímé hodnoty
         embed.add_field(
-            name="💳 Detail",
-            value=(f"**Datum:** {item['datum']}\n"
-                   f"**Nový pohyb:** {castka_fmt}\n"
-                   f"**Popis:** {item['popis']}"),
+            name="💳 ",
+            value=(f"Nový pohyb: {pohyb_fmt} Adena,-\n"
+                   f"Popis: {item['popis']}\n"
+                   f"Aktualně k dispozici: {item['rozpocet']}"),
             inline=False
         )
         
         msg = await channel.send(embed=embed)
-        print(f"✅ Nová transakce poslána: {item['datum']} - {item['popis']} (ID: {msg.id})")
+        print(f"✅ Nová transakce poslána: {item['popis']} (ID: {msg.id})")
         return msg.id
     except Exception as e:
         print(f"❌ Chyba při posílání transakce: {e}")
@@ -203,7 +203,7 @@ async def send_new_transaction(channel, item):
 
 async def update_transaction(channel, message_id, item):
     """Uprav existující transakci v Discordu"""
-    castka_fmt = format_accounting(item['castka'])
+    pohyb_fmt = format_accounting(item['pohyb'])
     
     try:
         msg = await channel.fetch_message(message_id)
@@ -216,17 +216,17 @@ async def update_transaction(channel, message_id, item):
         )
         
         embed.add_field(
-            name="💳 Detail",
-            value=(f"**Datum:** {item['datum']}\n"
-                   f"**Nový pohyb:** {castka_fmt}\n"
-                   f"**Popis:** {item['popis']}"),
+            name="💳 ",
+            value=(f"Nový pohyb: {pohyb_fmt} Adena,-\n"
+                   f"Popis: {item['popis']}\n"
+                   f"Aktualně k dispozici: {item['rozpocet']}"),
             inline=False
         )
         
         embed.set_footer(text="⚠️ Tento řádek byl upraven")
         
         await msg.edit(embed=embed)
-        print(f"✅ Transakce upravena: {item['datum']} - {item['popis']}")
+        print(f"✅ Transakce upravena: {item['popis']}")
     except discord.NotFound:
         print(f"⚠️  Zpráva s ID {message_id} nebyla nalezena (možná byla smazána)")
     except Exception as e:
@@ -281,7 +281,7 @@ async def check_new_transactions():
             
             if row_hash not in last_row_hashes:
                 # NOVÝ ŘÁDEK
-                print(f"📈 Nový řádek: {item['datum']} - {item['popis']}")
+                print(f"📈 Nový řádek: {item['popis']}")
                 new_items.append(item)
                 last_row_hashes[row_hash] = {
                     'data': item,
@@ -323,7 +323,7 @@ async def accounting_command(ctx):
     print("Command: !accounting")
     data = get_accounting_data()
     if data:
-        total_castka = sum(d["castka"] for d in data)
+        total_pohyb = sum(d["pohyb"] for d in data)
         
         # Hlavní embed s totály
         main_embed = create_embed(
@@ -335,7 +335,7 @@ async def accounting_command(ctx):
         
         main_embed.add_field(
             name="💰 Celkem",
-            value=f"`{format_accounting(total_castka)}`",
+            value=f"`{format_accounting(total_pohyb)}`",
             inline=False
         )
         
@@ -364,11 +364,11 @@ async def accounting_command(ctx):
             )
             
             for item in chunk:
-                castka_fmt = format_accounting(item['castka'])
+                pohyb_fmt = format_accounting(item['pohyb'])
                 
-                value = (f"**Datum:** {item['datum']}\n"
-                        f"**Nový pohyb:** {castka_fmt}\n"
-                        f"**Popis:** {item['popis']}")
+                value = (f"Nový pohyb: {pohyb_fmt} Adena,-\n"
+                        f"Popis: {item['popis']}\n"
+                        f"Aktualně k dispozici: {item['rozpocet']}")
                 
                 embed.add_field(
                     name=f"💳 Transakce",
