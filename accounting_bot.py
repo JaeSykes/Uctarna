@@ -280,4 +280,4 @@ async def on_ready():
 
 token = os.getenv("DISCORD_TOKEN")
 if token:
-    bot.run(token),,
+    bot.run(token)
