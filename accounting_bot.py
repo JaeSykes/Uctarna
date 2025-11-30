@@ -51,8 +51,8 @@ def save_state():
         print(f"❌ Chyba při ukládání stavu: {e}")
 
 def create_row_hash(row_data):
-    """Vytvoř unikátní hash pro řádek (datum|popis|castka)"""
-    row_str = f"{row_data['datum']}|{row_data['popis']}|{row_data['castka']}"
+    """Vytvoř unikátní hash pro řádek (datum|castka|popis)"""
+    row_str = f"{row_data['datum']}|{row_data['castka']}|{row_data['popis']}"
     return hashlib.md5(row_str.encode()).hexdigest()
 
 print("="*60)
@@ -100,7 +100,7 @@ def format_accounting(value):
     num = clean_number(value)
     return f"{int(num):,}".replace(',', '.')
 
-def is_valid_row(datum, popis, castka):
+def is_valid_row(datum, castka, popis):
     """Zkontroluj jestli je řádek validní"""
     # Ignoruj některé speciální řádky
     invalid_keywords = ['nic', 'sajk si hraje', 'datum', 'date', 'celkem', '']
@@ -130,6 +130,7 @@ def get_accounting_data():
         print("✅ Sheet opened")
         
         # Čti sloupce B, C, D - řádky 2-1000
+        # B = Datum, C = Nový pohyb (castka), D = Popis
         all_cells = sheet.range('B2:D1000')
         print(f"✅ Got {len(all_cells)} cells")
         
@@ -140,15 +141,15 @@ def get_accounting_data():
                 
                 if len(row_data) >= 1 and row_data[0].value:
                     datum = str(row_data[0].value).strip()
-                    popis = str(row_data[1].value).strip() if len(row_data) > 1 else ""
-                    castka = clean_number(row_data[2].value if len(row_data) > 2 else 0)
+                    castka = clean_number(row_data[1].value if len(row_data) > 1 else 0)
+                    popis = str(row_data[2].value).strip() if len(row_data) > 2 else ""
                     
-                    # NOVÁ VALIDACE - lépe filtruje řádky
-                    if is_valid_row(datum, popis, castka):
+                    # VALIDACE
+                    if is_valid_row(datum, castka, popis):
                         data.append({
                             "datum": datum,
-                            "popis": popis,
-                            "castka": castka
+                            "castka": castka,
+                            "popis": popis
                         })
             
             print(f"✅ Got {len(data)} rows of data")
@@ -182,11 +183,12 @@ async def send_new_transaction(channel, item):
             datetime.now()
         )
         
+        # Správné pořadí sloupců: Datum, Nový pohyb, Popis
         embed.add_field(
             name="💳 Detail",
             value=(f"**Datum:** {item['datum']}\n"
-                   f"**Popis:** {item['popis']}\n"
-                   f"**Částka:** {castka_fmt}"),
+                   f"**Nový pohyb:** {castka_fmt}\n"
+                   f"**Popis:** {item['popis']}"),
             inline=False
         )
         
@@ -216,8 +218,8 @@ async def update_transaction(channel, message_id, item):
         embed.add_field(
             name="💳 Detail",
             value=(f"**Datum:** {item['datum']}\n"
-                   f"**Popis:** {item['popis']}\n"
-                   f"**Částka:** {castka_fmt}"),
+                   f"**Nový pohyb:** {castka_fmt}\n"
+                   f"**Popis:** {item['popis']}"),
             inline=False
         )
         
@@ -286,7 +288,7 @@ async def check_new_transactions():
                     'message_id': None
                 }
         
-        # Pošli nové transakce - KAŽDÁ V SEPNÉ TRY-CATCH
+        # Pošli nové transakce
         for item in new_items:
             row_hash = create_row_hash(item)
             msg_id = await send_new_transaction(channel, item)
@@ -365,8 +367,8 @@ async def accounting_command(ctx):
                 castka_fmt = format_accounting(item['castka'])
                 
                 value = (f"**Datum:** {item['datum']}\n"
-                        f"**Popis:** {item['popis']}\n"
-                        f"**Částka:** {castka_fmt}")
+                        f"**Nový pohyb:** {castka_fmt}\n"
+                        f"**Popis:** {item['popis']}")
                 
                 embed.add_field(
                     name=f"💳 Transakce",
