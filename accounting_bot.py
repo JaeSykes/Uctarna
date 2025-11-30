@@ -22,6 +22,7 @@ STATE_FILE = "/tmp/bot_state.json"
 
 # Globální proměnné pro sledování řádků
 last_row_count = 0
+first_check_done = False  # Příznak pro první kontrolu
 
 def load_state():
     """Načti poslední známý počet řádků ze souboru"""
@@ -130,7 +131,6 @@ def get_accounting_data():
                                 "popis": popis,
                                 "castka": castka
                             })
-                            print(f"✅ {datum}: {popis} = {castka}")
                     except Exception as e:
                         print(f"Parse error for {datum}: {e}")
                         continue
@@ -183,7 +183,7 @@ async def send_new_transactions(channel, new_data):
 @tasks.loop(minutes=5)
 async def check_new_transactions():
     """Kontroluj nové transakce každých 5 minut"""
-    global last_row_count
+    global last_row_count, first_check_done
     
     print("\n🔍 Kontrola nových transakcí...")
     data = get_accounting_data()
@@ -203,7 +203,16 @@ async def check_new_transactions():
             print("❌ Kanál nenalezen!")
             return
         
-        # Pokud je nový počet řádků větší než poslední známý
+        # PRVNÍ KONTROLA - jen si zapamatuj počet, neposílej notifikace
+        if not first_check_done:
+            print(f"📌 PRVNÍ KONTROLA - Zapamatuji si {current_row_count} stávajících řádků")
+            print(f"⏭️  Příští nové řádky budou poslány jako notifikace")
+            last_row_count = current_row_count
+            save_state()
+            first_check_done = True
+            return
+        
+        # DALŠÍ KONTROLY - Postup jen nové transakce
         if current_row_count > last_row_count:
             new_rows = current_row_count - last_row_count
             print(f"📈 Nalezeny {new_rows} nové transakce!")
