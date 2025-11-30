@@ -17,8 +17,36 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "1443610848391204955"))
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 SHEET_NAME = "Učetnictví"
 
+# Soubor pro uložení stavu (persistent storage)
+STATE_FILE = "/tmp/bot_state.json"
+
 # Globální proměnné pro sledování řádků
 last_row_count = 0
+
+def load_state():
+    """Načti poslední známý počet řádků ze souboru"""
+    global last_row_count
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                data = json.load(f)
+                last_row_count = data.get('last_row_count', 0)
+                print(f"✅ Načten poslední stav: {last_row_count} řádků")
+        else:
+            last_row_count = 0
+            print("📝 Žádný předchozí stav nenalezen")
+    except Exception as e:
+        print(f"⚠️  Chyba při načítání stavu: {e}")
+        last_row_count = 0
+
+def save_state():
+    """Ulož aktuální stav do souboru"""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump({'last_row_count': last_row_count}, f)
+        print(f"💾 Stav uložen: {last_row_count} řádků")
+    except Exception as e:
+        print(f"❌ Chyba při ukládání stavu: {e}")
 
 print("="*60)
 print("ACCOUNTING BOT - CZM8")
@@ -165,6 +193,7 @@ async def check_new_transactions():
         return
     
     current_row_count = len(data)
+    print(f"📊 Aktuální počet řádků: {current_row_count}, Poslední známý: {last_row_count}")
     
     try:
         guild = bot.get_guild(SERVER_ID)
@@ -182,8 +211,12 @@ async def check_new_transactions():
             # Pošli POUZE nové transakce
             new_transactions = data[-new_rows:]
             await send_new_transactions(channel, new_transactions)
+        else:
+            print("✅ Žádné nové transakce")
         
+        # Aktualizuj poslední známý počet
         last_row_count = current_row_count
+        save_state()  # Ulož do souboru
         
     except Exception as e:
         print(f"❌ Chyba při kontrole: {e}")
@@ -271,6 +304,10 @@ async def on_ready():
     print("="*60)
     print(f"Bot: {bot.user}")
     print("="*60)
+    
+    # Načti stav při startu
+    load_state()
+    
     print("READY")
     print("="*60)
     
