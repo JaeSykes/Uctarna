@@ -110,8 +110,8 @@ def get_accounting_data():
         sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
         print("✅ Sheet opened")
         
-        # Čti sloupce B, C, D - řádky 2-100
-        all_cells = sheet.range('B2:D100')
+        # Čti sloupce B, C, D - řádky 2-500 (na místo 2-100)
+        all_cells = sheet.range('B2:D1000')
         print(f"✅ Got {len(all_cells)} cells")
         
         if len(all_cells) >= 3:
@@ -214,7 +214,7 @@ async def update_transaction(channel, message_id, item):
     except Exception as e:
         print(f"❌ Chyba při úpravě zprávy: {e}")
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=2)
 async def check_new_transactions():
     """Kontroluj nové transakce a změny"""
     global last_row_hashes, first_check_done
@@ -387,7 +387,7 @@ async def on_ready():
     
     if not check_new_transactions.is_running():
         check_new_transactions.start()
-        print("🔍 Kontrola transakcí spuštěna (každých 5 minut)")
+        print("🔍 Kontrola transakcí spuštěna (každých 2 minuty)")
 
 token = os.getenv("DISCORD_TOKEN")
 if token:
