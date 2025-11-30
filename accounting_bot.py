@@ -15,7 +15,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SERVER_ID = int(os.getenv("GUILD_ID", "1397286059406000249"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "1443610848391204955"))
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-SHEET_NAME = "Účetnictví"
+SHEET_NAME = "Učetnictví"
 
 # Globální proměnné pro sledování řádků
 last_row_count = 0
